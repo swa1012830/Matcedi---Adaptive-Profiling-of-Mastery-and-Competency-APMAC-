@@ -3,11 +3,11 @@ import { supabase } from "./supabaseClient";
 
 // ─── DESIGN TOKENS — Light · Energetic · Growth ──────────────────────────────
 const C = {
-  bg:      "#F4F7FF",
+  bg:      "#F8FAFF",
   surface: "#FFFFFF",
-  raised:  "#EEF2FF",
-  border:  "#DDE3F5",
-  muted:   "#9AA5C4",
+  raised:  "#F1F5FD",
+  border:  "#E4E9F7",
+  muted:   "#A3ADC9",
   dim:     "#6B7A99",
   text:    "#1A2340",
   white:   "#FFFFFF",
@@ -267,9 +267,12 @@ function SignalDot({signal}){
 }
 
 // ─── VOICE HOOKS ──────────────────────────────────────────────────────────────
-// STT: hold-to-speak (Chrome/Edge only — sandbox limited)
+// STT: tap-to-talk, stays listening until you tap again — accumulates everything
+// you say across pauses instead of stopping after the first phrase.
 function useVoice(onResult) {
   const recRef = useRef(null);
+  const userStoppedRef = useRef(false); // tracks whether the stop was intentional
+  const accumulatedRef = useRef("");    // builds up full transcript across restarts
   const [listening, setListening] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
@@ -278,36 +281,69 @@ function useVoice(onResult) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { setUnavailable(true); setErrorMsg("Voice input isn't supported in this browser. Try Chrome."); return; }
     setErrorMsg(null);
-    try {
-      const rec = new SR();
-      rec.continuous = false;
-      rec.interimResults = false;
-      rec.lang = "en-US";
-      rec.onresult = (e) => { const t = e.results[0][0].transcript; onResult(t); };
-      rec.onend = () => setListening(false);
-      rec.onerror = (e) => {
+    userStoppedRef.current = false;
+    accumulatedRef.current = "";
+
+    const startEngine = () => {
+      try {
+        const rec = new SR();
+        rec.continuous = true;       // keep listening through natural pauses
+        rec.interimResults = true;   // get partial results so we can build the full sentence
+        rec.lang = "en-US";
+
+        rec.onresult = (e) => {
+          let finalChunk = "";
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            if (e.results[i].isFinal) finalChunk += e.results[i][0].transcript + " ";
+          }
+          if (finalChunk) {
+            accumulatedRef.current = (accumulatedRef.current + " " + finalChunk).trim();
+            onResult(accumulatedRef.current);
+          }
+        };
+
+        rec.onend = () => {
+          // Chrome sometimes ends the session on its own even with continuous=true
+          // (long silences, tab backgrounding). If the user didn't tap stop, restart
+          // automatically so it only ever stops when they actually want it to.
+          if (!userStoppedRef.current) {
+            try { rec.start(); } catch { setListening(false); }
+          } else {
+            setListening(false);
+          }
+        };
+
+        rec.onerror = (e) => {
+          if (e.error === "no-speech") return; // silence isn't a real error, keep going
+          setListening(false);
+          if (e.error === "not-allowed" || e.error === "permission-denied") {
+            setErrorMsg("Mic permission was blocked. Check your browser's site settings and allow microphone access, then try again.");
+          } else if (e.error === "network") {
+            setErrorMsg("Voice recognition needs an internet connection — check your connection and try again.");
+          } else {
+            setErrorMsg(`Voice input error: ${e.error}. Try again, or just type instead.`);
+          }
+        };
+
+        recRef.current = rec;
+        rec.start();
+        setListening(true);
+      } catch {
+        setUnavailable(true);
         setListening(false);
-        if (e.error === "not-allowed" || e.error === "permission-denied") {
-          setErrorMsg("Mic permission was blocked. Check your browser's site settings and allow microphone access, then try again.");
-        } else if (e.error === "no-speech") {
-          setErrorMsg("Didn't catch that — tap the mic and try again.");
-        } else if (e.error === "network") {
-          setErrorMsg("Voice recognition needs an internet connection — check your connection and try again.");
-        } else {
-          setErrorMsg(`Voice input error: ${e.error}. Try again, or just type instead.`);
-        }
-      };
-      recRef.current = rec;
-      rec.start();
-      setListening(true);
-    } catch {
-      setUnavailable(true);
-      setListening(false);
-      setErrorMsg("Couldn't start voice input. Try again, or type instead.");
-    }
+        setErrorMsg("Couldn't start voice input. Try again, or type instead.");
+      }
+    };
+
+    startEngine();
   }, [onResult]);
 
-  const stop = useCallback(() => { recRef.current?.stop(); setListening(false); }, []);
+  const stop = useCallback(() => {
+    userStoppedRef.current = true;
+    recRef.current?.stop();
+    setListening(false);
+  }, []);
+
   // Tap-to-toggle — avoids the first-use bug where the permission prompt's async
   // delay causes a hold-to-speak release to fire stop() before capture begins.
   const toggle = useCallback(() => { listening ? stop() : start(); }, [listening, start, stop]);
@@ -497,7 +533,15 @@ export default function APMAC() {
 
   useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[messages]);
 
-  const voice = useVoice((text) => { setInput(prev => prev + (prev?" ":"") + text); });
+  // Snapshot whatever was already typed before voice starts, so live speech
+  // replaces (not duplicates) on every update, while still preserving prior text.
+  const inputBeforeVoiceRef = useRef("");
+  const voice = useVoice((fullTranscript) => {
+    const prefix = inputBeforeVoiceRef.current;
+    setInput((prefix ? prefix + " " : "") + fullTranscript);
+  });
+  const startVoiceWithSnapshot = () => { inputBeforeVoiceRef.current = input; voice.start(); };
+  const voiceToggle = () => { voice.listening ? voice.stop() : startVoiceWithSnapshot(); };
   const tts   = useTTS();
 
   const base = {background:C.bg,minHeight:"100vh",fontFamily:"'Inter',-apple-system,sans-serif",color:C.text};
@@ -1023,7 +1067,7 @@ export default function APMAC() {
               <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendDiscoveryMsg(input);}}}
                 placeholder="Type your answer here, or tap the mic to talk..."
                 rows={2} style={{flex:1,background:C.bg,border:`1.5px solid ${input.length>5?C.purple:C.border}`,borderRadius:10,padding:"11px 14px",color:C.text,fontSize:15,lineHeight:1.5,outline:"none",resize:"none",fontFamily:"inherit"}}/>
-              <button onClick={voice.toggle}
+              <button onClick={voiceToggle}
                 style={{background:voice.listening?`${C.red}33`:`${C.purple}15`,border:`2px solid ${voice.listening?C.red:C.purple+"55"}`,color:voice.listening?C.red:C.purple,padding:"0 16px",borderRadius:10,cursor:"pointer",fontSize:19,flexShrink:0}}>
                 {voice.listening?"🔴":"🎙"}
               </button>
@@ -1116,7 +1160,7 @@ export default function APMAC() {
         <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
 
           {/* IDENTITY HEADER BAR */}
-          <div style={{background:`linear-gradient(135deg,${C.blue},${C.cyan})`,padding:"24px 32px",color:"#fff"}}>
+          <div style={{background:`linear-gradient(135deg,${C.blue},${C.cyan})`,padding:"30px 36px",color:"#fff"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:16}}>
               <div style={{display:"flex",alignItems:"center",gap:14}}>
                 <div style={{width:54,height:54,borderRadius:"50%",background:"rgba(255,255,255,0.2)",border:"2px solid rgba(255,255,255,0.4)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:900}}>ME</div>
@@ -1133,7 +1177,7 @@ export default function APMAC() {
           </div>
 
           {/* STATUS CARD */}
-          <div style={{padding:"20px 32px"}}>
+          <div style={{padding:"26px 36px"}}>
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:22,display:"flex",alignItems:"center",gap:24,flexWrap:"wrap"}}>
               <div style={{width:64,height:64,borderRadius:"50%",background:`${tier.color}18`,border:`3px solid ${tier.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,fontWeight:900,color:tier.color,flexShrink:0}}>{tier.level}</div>
               <div style={{flex:1,minWidth:200}}>
@@ -1171,7 +1215,7 @@ export default function APMAC() {
             </div>
           </div>
 
-          <div style={{maxWidth:780,padding:"24px 32px"}}>
+          <div style={{maxWidth:780,padding:"30px 36px"}}>
 
             {/* CREDENTIAL TAB */}
             {credentialTab==="credential" && (
@@ -1282,7 +1326,7 @@ export default function APMAC() {
             <Badge color={(currentTier||TIERS[0]).color}>{(currentTier||TIERS[0]).name}</Badge>
           </div>
 
-          <div style={{maxWidth:780,padding:"24px 32px"}}>
+          <div style={{maxWidth:780,padding:"30px 36px"}}>
 
             {/* PROGRESS CARD */}
             <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:24,marginBottom:20}}>
@@ -1566,7 +1610,7 @@ export default function APMAC() {
         onHome={()=>setView(onboardingDone?"mypath":"home")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
         onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")} onLogout={handleLogout}/>
       <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
-        <div style={{padding:"20px 32px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{padding:"26px 36px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
             <h2 style={{fontSize:21,fontWeight:800,marginBottom:3}}>{filterCat==="all"?"All Discussions":CATEGORIES.find(c=>c.id===filterCat)?.label}</h2>
             <p style={{color:C.dim,fontSize:13}}>{filteredTopics.length} topics · Scored passively through real conversation</p>
@@ -1574,7 +1618,7 @@ export default function APMAC() {
           <Badge color={C.orange}>TIER 1 — APPRENTICE</Badge>
         </div>
 
-        <div style={{maxWidth:760,padding:"24px 32px"}}>
+        <div style={{maxWidth:760,padding:"30px 36px"}}>
           {/* TOPIC LIST */}
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
             {filteredTopics.map(topic=>{
@@ -1729,7 +1773,7 @@ export default function APMAC() {
               <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();handleSend();}}}
                 placeholder={mode==="military"?"Type or tap 🎙 to talk — think out loud, no wrong answers...":mode==="self"?"Type or tap 🎙 to talk — explain your understanding...":"Type or tap 🎙 to talk — add to the discussion..."}
                 rows={2} style={{flex:1,background:C.bg,border:`1.5px solid ${input.length>10?modeColor:C.border}`,borderRadius:10,padding:"11px 14px",color:C.text,fontSize:15,lineHeight:1.5,outline:"none",resize:"none",fontFamily:"inherit",transition:"border 0.2s"}}/>
-              <button onClick={voice.toggle}
+              <button onClick={voiceToggle}
                 title="Tap to speak"
                 style={{background:voice.listening?`${C.red}33`:`${modeColor}15`,border:`2px solid ${voice.listening?C.red:modeColor+"55"}`,color:voice.listening?C.red:modeColor,padding:"0 16px",borderRadius:10,cursor:"pointer",fontSize:19,flexShrink:0,transition:"all 0.15s"}}>
                 {voice.listening?"🔴":"🎙"}
@@ -1758,11 +1802,11 @@ export default function APMAC() {
         onHome={()=>setView(onboardingDone?"mypath":"home")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
         onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")} onLogout={handleLogout}/>
       <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
-        <div style={{padding:"20px 32px",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{padding:"26px 36px",borderBottom:`1px solid ${C.border}`}}>
           <h2 style={{fontSize:21,fontWeight:800,marginBottom:3}}>Official Benchmark Standards</h2>
           <p style={{color:C.dim,fontSize:13}}>Your benchmark score is the floor. APMAC tier is what you build above it.</p>
         </div>
-        <div style={{maxWidth:680,padding:"24px 32px"}}>
+        <div style={{maxWidth:680,padding:"30px 36px"}}>
           <div style={{background:`${C.orange}11`,border:`1px solid ${C.orange}33`,borderRadius:10,padding:"12px 16px",marginBottom:24,fontSize:13,color:C.dim}}>
             <strong style={{color:C.orange}}>How benchmarks work:</strong> Official tests verify you meet minimum licensing standards. APMAC discussions verify you actually understand the craft. Employers see both — the license and the real competency built on top of it.
           </div>
@@ -1854,7 +1898,7 @@ export default function APMAC() {
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,gap:10}}>
             <span style={{fontSize:12,color:C.muted}}>{input.trim().split(/\s+/).filter(Boolean).length} words</span>
             <div style={{display:"flex",gap:8}}>
-              <button onClick={voice.toggle}
+              <button onClick={voiceToggle}
                 title="Tap to speak"
                 style={{background:voice.listening?`${C.red}33`:`${selBenchmark.color}15`,border:`2px solid ${voice.listening?C.red:selBenchmark.color+"55"}`,color:voice.listening?C.red:selBenchmark.color,padding:"0 14px",borderRadius:9,cursor:"pointer",fontSize:17,flexShrink:0}}>
                 {voice.listening?"🔴":"🎙"}
@@ -1879,11 +1923,11 @@ export default function APMAC() {
         onHome={()=>setView(onboardingDone?"mypath":"home")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
         onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")} onLogout={handleLogout}/>
       <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
-        <div style={{padding:"20px 32px",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{padding:"26px 36px",borderBottom:`1px solid ${C.border}`}}>
           <span style={{fontWeight:800,fontSize:18}}>Military Classification Mode</span>
           <div style={{marginTop:6}}><Badge color={C.purple} small>ASR-Level Assessment</Badge></div>
         </div>
-        <div style={{maxWidth:680,padding:"24px 32px"}}>
+        <div style={{maxWidth:680,padding:"30px 36px"}}>
         <div style={{background:`${C.purple}11`,border:`1px solid ${C.purple}33`,borderRadius:12,padding:"20px 22px",marginBottom:28}}>
           <div style={{fontSize:16,fontWeight:800,color:C.purple,marginBottom:8}}>How Military Classification Works</div>
           <p style={{fontSize:14,color:C.dim,lineHeight:1.75,marginBottom:12}}>
