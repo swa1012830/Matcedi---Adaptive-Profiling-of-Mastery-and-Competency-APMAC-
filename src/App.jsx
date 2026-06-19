@@ -181,6 +181,7 @@ async function benchmarkScore(text, benchmark, question) {
 // are passively scored for competency. ──────────────────────────────────────
 async function getDiscoveryResponse(text, history, depth) {
   const ctx = history.map(m=>`${m.role==="user"?"Person":"Guide"}: ${m.text}`).join("\n");
+  const lastGuideMsg = [...history].reverse().find(m=>m.role==="guide")?.text || "";
   const stage = depth<2
       ? "warm-up — stay easy and human, ask about everyday life, what they're doing now, what they spend their time on. Nothing analytical yet. This should feel like small talk that's actually going somewhere."
     : depth<4
@@ -194,12 +195,19 @@ This must read like a real counselor's turn, not a Q&A bot:
 - Most turns should NOT end in a question mark. Sometimes reflect back what you heard. Sometimes make a short warm observation. Ask a direct question when it earns one, roughly half the time.
 - Keep early questions concrete and easy — "what's your day look like," "what do you do for work right now," "what did you want to be as a kid" — not abstract self-reflection prompts.
 - Never use clinical or scripted phrasing ("Tell me more about that") — talk the way a real, warm person talks.
+- CRITICAL: never repeat or closely rephrase your own previous message. Your last message was: "${lastGuideMsg}" — if their answer was vague or general, push for a SPECIFIC concrete example instead ("give me an example from this week" / "like what, specifically?") rather than re-asking the same broad question.
 - You have the FULL conversation history — build on it, callback to something said earlier if it fits, don't repeat ground already covered.
 
 Stage: ${stage}. Keep it under 30 words. Warm, leading, conversational.`,
     `Full conversation so far:\n${ctx}\nThey just said: "${text}"`
   );
-  return result.trim() || "Got it — and what does a normal day look like for you right now?";
+  const reply = result.trim();
+  // Guard against the model accidentally echoing its own last line, and against
+  // empty responses defaulting to something that duplicates the prior turn.
+  if (!reply || reply.toLowerCase() === lastGuideMsg.toLowerCase()) {
+    return "Give me a specific example — like, what's one thing you did this week?";
+  }
+  return reply;
 }
 
 async function getDiscoveryResult(history) {
