@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { supabase } from "./supabaseClient";
 
 // ─── DESIGN TOKENS — Light · Energetic · Growth ──────────────────────────────
 const C = {
@@ -335,7 +336,7 @@ function useTTS() {
 }
 
 // ─── SIDEBAR — persistent left nav, dropdown sections, keeps center clear ─────
-function Sidebar({ view, activeTopicId, sidebarOpen, setSidebarOpen, filterCat, setFilterCat, completed, onHome, onPickTopic, onPickMode, onBenchmarks, onPickBenchmark, onMilitary, onEmployer, authed, plan, onAuth, onboardingDone, onMyPath }) {
+function Sidebar({ view, activeTopicId, sidebarOpen, setSidebarOpen, filterCat, setFilterCat, completed, onHome, onPickTopic, onPickMode, onBenchmarks, onPickBenchmark, onMilitary, onEmployer, authed, plan, onAuth, onboardingDone, onMyPath, onLogout }) {
   const catCounts = {};
   CATEGORIES.forEach(c=>{ catCounts[c.id] = TOPICS.filter(t=>t.cat===c.id).length; });
 
@@ -430,6 +431,7 @@ function Sidebar({ view, activeTopicId, sidebarOpen, setSidebarOpen, filterCat, 
               <div style={{fontSize:12.5,fontWeight:700,color:C.text}}>Worker Account</div>
               <div style={{fontSize:11,color:plan==="paid"?C.green:C.orange,fontWeight:600}}>{plan==="paid"?"✓ Full Access":"Free Tier"}</div>
             </div>
+            <button onClick={onLogout} title="Log out" style={{background:"transparent",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"4px 6px"}}>Log out</button>
           </div>
         ) : (
           <button onClick={onAuth} style={{width:"100%",background:`linear-gradient(135deg,${C.blue},${C.cyan})`,border:"none",color:"#fff",borderRadius:8,padding:"9px 0",cursor:"pointer",fontSize:12.5,fontWeight:700}}>
@@ -450,13 +452,19 @@ function Sidebar({ view, activeTopicId, sidebarOpen, setSidebarOpen, filterCat, 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function APMAC() {
   const [view, setView]             = useState("home");
-  // ── Mock auth/plan state — no real backend, demo-ready gating only ──────────
+  // ── Real auth/plan state — backed by Supabase ────────────────────────────────
   const [authed, setAuthed]         = useState(false);
+  const [userId, setUserId]         = useState(null);
   const [plan, setPlan]             = useState(null); // null | "free" | "paid"
   const [freeUsed, setFreeUsed]     = useState(false); // free tier = 1 topic, then gated
   const [pendingTopic, setPendingTopic] = useState(null); // topic user tried to open while gated
   const [authMode, setAuthMode]     = useState("login"); // login | signup
   const [employerAuthed, setEmployerAuthed] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true); // checking for existing session on load
+  const [authBusy, setAuthBusy]     = useState(false);  // submitting login/signup form
+  const [authError, setAuthError]   = useState(null);
+  const [authEmail, setAuthEmail]   = useState("");
+  const [authPassword, setAuthPassword] = useState("");
   // ── Path / journey state ────────────────────────────────────────────────────
   const [selectedTrade, setSelectedTrade] = useState(null);   // trade id once chosen
   const [onboardingDone, setOnboardingDone] = useState(false); // has user completed entry routing
@@ -498,20 +506,112 @@ export default function APMAC() {
   const avgHistory = Math.round(profile.history.reduce((s,h)=>s+h.score,0)/profile.history.length);
   const workerTier = getTier(avgHistory);
 
-  // ── Mock auth handlers — demo only, no real backend ─────────────────────────
-  function mockLogin(selectedPlan) {
-    setAuthed(true);
-    setPlan(selectedPlan);
+  // ── Real auth handlers — backed by Supabase ──────────────────────────────────
+
+  // Load a user's profile + journey log + completed topics from the database
+  // and hydrate local state so the rest of the app works exactly as before.
+  async function loadUserData(uid) {
+    const { data: profileData } = await supabase.from("profiles").select("*").eq("id", uid).single();
+    if (profileData) {
+      setPlan(profileData.plan);
+      setFreeUsed(!!profileData.free_topic_used);
+      setSelectedTrade(profileData.selected_trade);
+      setOnboardingDone(!!profileData.onboarding_done);
+      setCum(profileData.cum_score);
+    }
+    const { data: logData } = await supabase.from("journey_log").select("*").eq("user_id", uid).order("created_at", { ascending: true });
+    if (logData) {
+      setJourneyLog(logData.map(e => ({ date: e.created_at, type: e.type, label: e.label, score: e.score, tier: e.tier })));
+    }
+    const { data: completedData } = await supabase.from("completed_topics").select("*").eq("user_id", uid);
+    if (completedData) {
+      const map = {};
+      completedData.forEach(c => { map[c.topic_key] = c.score; });
+      setCompleted(map);
+    }
+  }
+
+  // On mount: restore an existing session if one exists, so closing the tab
+  // and coming back doesn't lose anything.
+  useEffect(() => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session?.user) {
+        setAuthed(true);
+        setUserId(session.user.id);
+        await loadUserData(session.user.id);
+      }
+      setAuthLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        setAuthed(false); setUserId(null); setPlan(null); setJourneyLog([]); setCompleted({});
+        setSelectedTrade(null); setOnboardingDone(false); setCum(null);
+      }
+    });
+    return () => listener?.subscription?.unsubscribe();
+  }, []);
+
+  async function handleSignup(email, password) {
+    setAuthBusy(true); setAuthError(null);
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    setAuthBusy(false);
+    if (error) { setAuthError(error.message); return; }
+    if (data.user) {
+      setAuthed(true);
+      setUserId(data.user.id);
+      setPlan("free");
+      finishLogin();
+    } else {
+      setAuthError("Check your email to confirm your account, then log in.");
+    }
+  }
+
+  async function handleLoginSubmit(email, password) {
+    setAuthBusy(true); setAuthError(null);
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    setAuthBusy(false);
+    if (error) { setAuthError(error.message); return; }
+    if (data.user) {
+      setAuthed(true);
+      setUserId(data.user.id);
+      await loadUserData(data.user.id);
+      finishLogin();
+    }
+  }
+
+  function finishLogin() {
     if (pendingTopic) {
-      // They were trying to reach a specific topic — let that flow finish normally
       const { topic, m } = pendingTopic;
       setPendingTopic(null);
-      setOnboardingDone(true); // skip routing screen, they already know what they want
+      setOnboardingDone(true);
       setTimeout(()=>startDiscussion(topic, m), 50);
       return;
     }
     setView(onboardingDone ? "catalog" : "route");
   }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    setView("home");
+  }
+
+  // ── Persist a journey log entry both locally and to the database ────────────
+  async function logJourneyEntry(entry) {
+    setJourneyLog(prev=>[...prev, entry]);
+    if (userId) {
+      await supabase.from("journey_log").insert({
+        user_id: userId, type: entry.type, label: entry.label, score: entry.score, tier: entry.tier,
+      });
+    }
+  }
+  // ── Persist a completed topic both locally and to the database ──────────────
+  async function logCompletedTopic(topicKey, score) {
+    setCompleted(prev=>({...prev, [topicKey]: score}));
+    if (userId) {
+      await supabase.from("completed_topics").upsert({ user_id: userId, topic_key: topicKey, score }, { onConflict: "user_id,topic_key" });
+    }
+  }
+
   function mockEmployerLogin() {
     setEmployerAuthed(true);
     setView("employer");
@@ -522,11 +622,14 @@ export default function APMAC() {
   }
 
   // ── "I know my path" — pick a trade, go straight to My Path for it ──────────
-  function pickTrade(tradeId) {
+  async function pickTrade(tradeId) {
     setSelectedTrade(tradeId);
     setOnboardingDone(true);
     setFilterCat("all");
     setView("mypath");
+    if (userId) {
+      await supabase.from("profiles").update({ selected_trade: tradeId, onboarding_done: true }).eq("id", userId);
+    }
   }
 
   // ── Discovery conversation — passive trade-fit mapping ──────────────────────
@@ -565,7 +668,7 @@ export default function APMAC() {
     if (matchedTrade) {
       setSelectedTrade(matchedTrade.id);
       setOnboardingDone(true);
-      setJourneyLog(prev=>[...prev,{date:new Date().toISOString(),type:"Discovery",label:`Mapped to ${discoveryResult.primaryLabel}`,score:null,tier:null}]);
+      logJourneyEntry({date:new Date().toISOString(),type:"Discovery",label:`Mapped to ${discoveryResult.primaryLabel}`,score:null,tier:null});
       setView("mypath");
     } else {
       setOnboardingDone(true);
@@ -645,8 +748,15 @@ export default function APMAC() {
       const avg = Math.round(ns.reduce((a,r)=>a+r.overall,0)/ns.length);
       setCum(avg);
       if (ns.length>=3) {
-        setCompleted(prev=>({...prev,[activeTopic.id]:avg}));
-        setJourneyLog(prev=>[...prev,{date:new Date().toISOString(),type:"Guided Discussion",label:activeTopic.title,score:avg,tier:getTier(avg).name}]);
+        logCompletedTopic(activeTopic.id, avg);
+        logJourneyEntry({date:new Date().toISOString(),type:"Guided Discussion",label:activeTopic.title,score:avg,tier:getTier(avg).name});
+        // Free tier gets exactly one real discussion before the paywall.
+        if (plan==="free" && !freeUsed && userId) {
+          setFreeUsed(true);
+          supabase.from("profiles").update({ free_topic_used: true, cum_score: avg }).eq("id", userId);
+        } else if (userId) {
+          supabase.from("profiles").update({ cum_score: avg }).eq("id", userId);
+        }
       }
       await new Promise(r=>setTimeout(r,900));
       const peers = activeTopic.seedMessages.filter(m=>m.role!=="moderator");
@@ -665,8 +775,9 @@ export default function APMAC() {
       const newDepth = selfDepth + 1;
       setSelfDepth(newDepth);
       if (ns.length>=3) {
-        setCompleted(prev=>({...prev,[activeTopic.id+"_"+mode]:avg}));
-        setJourneyLog(prev=>[...prev,{date:new Date().toISOString(),type:mode==="military"?"Classification":"Self-Study",label:activeTopic.title,score:avg,tier:getTier(avg).name}]);
+        logCompletedTopic(activeTopic.id+"_"+mode, avg);
+        logJourneyEntry({date:new Date().toISOString(),type:mode==="military"?"Classification":"Self-Study",label:activeTopic.title,score:avg,tier:getTier(avg).name});
+        if (userId) supabase.from("profiles").update({ cum_score: avg }).eq("id", userId);
       }
       await new Promise(r=>setTimeout(r,900));
       const reply = await getTutorResponse(text, activeTopic, [...messages,userMsg].map(m=>({role:m.role==="worker"?"user":"assistant",text:m.text})), newDepth);
@@ -757,19 +868,26 @@ export default function APMAC() {
             </div>
           )}
 
+          {authError && (
+            <div style={{background:`${C.red}10`,border:`1px solid ${C.red}33`,borderRadius:9,padding:"10px 12px",marginBottom:18,fontSize:12.5,color:C.red}}>
+              {authError}
+            </div>
+          )}
+
           <div style={{marginBottom:14}}>
             <label style={{fontSize:12,fontWeight:700,color:C.dim,display:"block",marginBottom:5}}>Email</label>
-            <input type="email" placeholder="you@example.com" style={{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 13px",fontSize:14,color:C.text,outline:"none"}}/>
+            <input type="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)} placeholder="you@example.com" style={{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 13px",fontSize:14,color:C.text,outline:"none"}}/>
           </div>
           <div style={{marginBottom:22}}>
             <label style={{fontSize:12,fontWeight:700,color:C.dim,display:"block",marginBottom:5}}>Password</label>
-            <input type="password" placeholder="••••••••" style={{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 13px",fontSize:14,color:C.text,outline:"none"}}/>
+            <input type="password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")authMode==="signup"?handleSignup(authEmail,authPassword):handleLoginSubmit(authEmail,authPassword);}} placeholder="At least 6 characters" style={{width:"100%",boxSizing:"border-box",background:C.bg,border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 13px",fontSize:14,color:C.text,outline:"none"}}/>
           </div>
 
-          <button onClick={()=>mockLogin("free")} style={{width:"100%",background:`linear-gradient(135deg,${C.blue},${C.cyan})`,border:"none",color:"#fff",padding:"13px",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:700,marginBottom:10}}>
-            {authMode==="signup"?"Create Free Account":"Log In"}
+          <button onClick={()=>authMode==="signup"?handleSignup(authEmail,authPassword):handleLoginSubmit(authEmail,authPassword)} disabled={authBusy||!authEmail||authPassword.length<6}
+            style={{width:"100%",background:authBusy||!authEmail||authPassword.length<6?C.border:`linear-gradient(135deg,${C.blue},${C.cyan})`,border:"none",color:authBusy||!authEmail||authPassword.length<6?C.muted:"#fff",padding:"13px",borderRadius:10,cursor:authBusy?"wait":"pointer",fontSize:14,fontWeight:700,marginBottom:10}}>
+            {authBusy ? "···" : authMode==="signup"?"Create Free Account":"Log In"}
           </button>
-          <div style={{textAlign:"center",fontSize:11.5,color:C.muted}}>Demo mode — any email/password works · No real account created</div>
+          <div style={{textAlign:"center",fontSize:11.5,color:C.muted}}>Real account — your progress is saved and follows you everywhere</div>
         </div>
         <div style={{textAlign:"center",marginTop:16}}>
           <button onClick={()=>setView("home")} style={{background:"transparent",border:"none",color:C.dim,cursor:"pointer",fontSize:13}}>← Back to home</button>
@@ -994,7 +1112,7 @@ export default function APMAC() {
       <div style={{display:"flex"}}>
         <Sidebar view={view} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} filterCat={filterCat} setFilterCat={setFilterCat} completed={completed}
           onHome={()=>setView(onboardingDone?"mypath":"home")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
-          onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")}/>
+          onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")} onLogout={handleLogout}/>
         <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
 
           {/* IDENTITY HEADER BAR */}
@@ -1149,7 +1267,7 @@ export default function APMAC() {
       <div style={{display:"flex"}}>
         <Sidebar view={view} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} filterCat={filterCat} setFilterCat={setFilterCat} completed={completed}
           onHome={()=>setView("mypath")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
-          onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")}/>
+          onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")} onLogout={handleLogout}/>
         <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
 
           {/* HEADER */}
@@ -1266,9 +1384,15 @@ export default function APMAC() {
           {["All 30 discussion topics, every category","Self-directed learning, unlimited depth","Voice input everywhere — type or talk","Full APMAC tier profile + benchmark tracking","Portable score visible to employers"].map(f=>(
             <div key={f} style={{display:"flex",gap:8,marginBottom:9,fontSize:13.5,color:C.dim}}><span style={{color:C.green}}>✓</span>{f}</div>
           ))}
-          <button onClick={()=>mockLogin("paid")} style={{width:"100%",background:`linear-gradient(135deg,${C.blue},${C.cyan})`,border:"none",color:"#fff",padding:"13px",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:700,marginTop:18}}>
-            Upgrade Now — Demo
+          <button onClick={async ()=>{
+              if (userId) { await supabase.from("profiles").update({ plan: "paid" }).eq("id", userId); }
+              setPlan("paid");
+              setView(pendingTopic ? "catalog" : (onboardingDone ? "mypath" : "route"));
+              if (pendingTopic) { const {topic,m}=pendingTopic; setPendingTopic(null); setTimeout(()=>startDiscussion(topic,m),50); }
+            }} style={{width:"100%",background:`linear-gradient(135deg,${C.blue},${C.cyan})`,border:"none",color:"#fff",padding:"13px",borderRadius:10,cursor:"pointer",fontSize:14,fontWeight:700,marginTop:18}}>
+            Upgrade Now
           </button>
+          <div style={{textAlign:"center",fontSize:11,color:C.muted,marginTop:10}}>Payment processing not yet connected — this unlocks your account without charging a card.</div>
         </div>
         <button onClick={()=>setView("catalog")} style={{background:"transparent",border:"none",color:C.dim,cursor:"pointer",fontSize:13}}>← Back to free content</button>
       </div>
@@ -1307,6 +1431,16 @@ export default function APMAC() {
         <div style={{textAlign:"center",marginTop:16}}>
           <button onClick={()=>setView("home")} style={{background:"transparent",border:"none",color:C.dim,cursor:"pointer",fontSize:13}}>← Back to home</button>
         </div>
+      </div>
+    </div>
+  );
+
+  // ── Loading screen while checking for an existing session on first load ─────
+  if (authLoading) return (
+    <div style={{...base,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{width:32,height:32,background:`linear-gradient(135deg,${C.blue},${C.cyan})`,borderRadius:8,margin:"0 auto 14px"}}/>
+        <div style={{color:C.muted,fontSize:13}}>Loading APMAC...</div>
       </div>
     </div>
   );
@@ -1430,7 +1564,7 @@ export default function APMAC() {
     <div style={{display:"flex"}}>
       <Sidebar view={view} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} filterCat={filterCat} setFilterCat={setFilterCat} completed={completed}
         onHome={()=>setView(onboardingDone?"mypath":"home")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
-        onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")}/>
+        onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")} onLogout={handleLogout}/>
       <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
         <div style={{padding:"20px 32px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
@@ -1490,7 +1624,7 @@ export default function APMAC() {
       <div style={{display:"flex"}}>
         <Sidebar view={view} activeTopicId={activeTopic.id} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} filterCat={filterCat} setFilterCat={setFilterCat} completed={completed}
           onHome={()=>setView(onboardingDone?"mypath":"home")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
-          onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")}/>
+          onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")} onLogout={handleLogout}/>
       <div style={{...base,flex:1,display:"flex",flexDirection:"column",height:"100vh"}}>
         {/* NAV — stacked and larger for mobile legibility */}
         <div style={{borderBottom:`1px solid ${C.border}`,background:C.surface}}>
@@ -1622,7 +1756,7 @@ export default function APMAC() {
     <div style={{display:"flex"}}>
       <Sidebar view={view} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} filterCat={filterCat} setFilterCat={setFilterCat} completed={completed}
         onHome={()=>setView(onboardingDone?"mypath":"home")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
-        onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")}/>
+        onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")} onLogout={handleLogout}/>
       <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
         <div style={{padding:"20px 32px",borderBottom:`1px solid ${C.border}`}}>
           <h2 style={{fontSize:21,fontWeight:800,marginBottom:3}}>Official Benchmark Standards</h2>
@@ -1743,7 +1877,7 @@ export default function APMAC() {
     <div style={{display:"flex"}}>
       <Sidebar view={view} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} filterCat={filterCat} setFilterCat={setFilterCat} completed={completed}
         onHome={()=>setView(onboardingDone?"mypath":"home")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
-        onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")}/>
+        onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")} onLogout={handleLogout}/>
       <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
         <div style={{padding:"20px 32px",borderBottom:`1px solid ${C.border}`}}>
           <span style={{fontWeight:800,fontSize:18}}>Military Classification Mode</span>
