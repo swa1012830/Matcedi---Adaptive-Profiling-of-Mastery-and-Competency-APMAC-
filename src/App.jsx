@@ -235,20 +235,47 @@ function useVoice(onResult) {
   const recRef = useRef(null);
   const [listening, setListening] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(null);
+
   const start = useCallback(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { setUnavailable(true); return; }
+    if (!SR) { setUnavailable(true); setErrorMsg("Voice input isn't supported in this browser. Try Chrome."); return; }
+    setErrorMsg(null);
     try {
       const rec = new SR();
-      rec.continuous = false; rec.interimResults = false; rec.lang = "en-US";
+      rec.continuous = false;
+      rec.interimResults = false;
+      rec.lang = "en-US";
       rec.onresult = (e) => { const t = e.results[0][0].transcript; onResult(t); };
       rec.onend = () => setListening(false);
-      rec.onerror = () => { setListening(false); setUnavailable(true); };
-      recRef.current = rec; rec.start(); setListening(true); setUnavailable(false);
-    } catch { setUnavailable(true); setListening(false); }
+      rec.onerror = (e) => {
+        setListening(false);
+        if (e.error === "not-allowed" || e.error === "permission-denied") {
+          setErrorMsg("Mic permission was blocked. Check your browser's site settings and allow microphone access, then try again.");
+        } else if (e.error === "no-speech") {
+          setErrorMsg("Didn't catch that — tap the mic and try again.");
+        } else if (e.error === "network") {
+          setErrorMsg("Voice recognition needs an internet connection — check your connection and try again.");
+        } else {
+          setErrorMsg(`Voice input error: ${e.error}. Try again, or just type instead.`);
+        }
+      };
+      recRef.current = rec;
+      rec.start();
+      setListening(true);
+    } catch {
+      setUnavailable(true);
+      setListening(false);
+      setErrorMsg("Couldn't start voice input. Try again, or type instead.");
+    }
   }, [onResult]);
+
   const stop = useCallback(() => { recRef.current?.stop(); setListening(false); }, []);
-  return { listening, start, stop, unavailable };
+  // Tap-to-toggle — avoids the first-use bug where the permission prompt's async
+  // delay causes a hold-to-speak release to fire stop() before capture begins.
+  const toggle = useCallback(() => { listening ? stop() : start(); }, [listening, start, stop]);
+
+  return { listening, start, stop, toggle, unavailable, errorMsg };
 }
 
 // TTS: read text aloud using browser speech synthesis
@@ -835,7 +862,7 @@ export default function APMAC() {
               <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendDiscoveryMsg(input);}}}
                 placeholder="Type your answer here, or tap the mic to talk..."
                 rows={2} style={{flex:1,background:C.bg,border:`1.5px solid ${input.length>5?C.purple:C.border}`,borderRadius:10,padding:"11px 14px",color:C.text,fontSize:15,lineHeight:1.5,outline:"none",resize:"none",fontFamily:"inherit"}}/>
-              <button onMouseDown={voice.start} onMouseUp={voice.stop} onTouchStart={voice.start} onTouchEnd={voice.stop}
+              <button onClick={voice.toggle}
                 style={{background:voice.listening?`${C.red}33`:`${C.purple}15`,border:`2px solid ${voice.listening?C.red:C.purple+"55"}`,color:voice.listening?C.red:C.purple,padding:"0 16px",borderRadius:10,cursor:"pointer",fontSize:19,flexShrink:0}}>
                 {voice.listening?"🔴":"🎙"}
               </button>
@@ -844,9 +871,14 @@ export default function APMAC() {
                 {discoverySending?"···":"Send"}
               </button>
             </div>
-            {voice.unavailable && (
+            {voice.listening && (
+              <div style={{marginTop:8,fontSize:12,color:C.red,textAlign:"center",fontWeight:600}}>
+                🔴 Listening — tap the mic again when you're done talking
+              </div>
+            )}
+            {voice.errorMsg && (
               <div style={{marginTop:8,fontSize:12,color:C.orange,textAlign:"center"}}>
-                🎙 Voice isn't available in this preview — typing works perfectly fine here, voice will work once the site is live.
+                🎙 {voice.errorMsg}
               </div>
             )}
           </div>
@@ -1344,8 +1376,8 @@ export default function APMAC() {
               <textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();handleSend();}}}
                 placeholder={mode==="military"?"Type or tap 🎙 to talk — think out loud, no wrong answers...":mode==="self"?"Type or tap 🎙 to talk — explain your understanding...":"Type or tap 🎙 to talk — add to the discussion..."}
                 rows={2} style={{flex:1,background:C.bg,border:`1.5px solid ${input.length>10?modeColor:C.border}`,borderRadius:10,padding:"11px 14px",color:C.text,fontSize:15,lineHeight:1.5,outline:"none",resize:"none",fontFamily:"inherit",transition:"border 0.2s"}}/>
-              <button onMouseDown={voice.start} onMouseUp={voice.stop} onTouchStart={voice.start} onTouchEnd={voice.stop}
-                title="Hold to speak"
+              <button onClick={voice.toggle}
+                title="Tap to speak"
                 style={{background:voice.listening?`${C.red}33`:`${modeColor}15`,border:`2px solid ${voice.listening?C.red:modeColor+"55"}`,color:voice.listening?C.red:modeColor,padding:"0 16px",borderRadius:10,cursor:"pointer",fontSize:19,flexShrink:0,transition:"all 0.15s"}}>
                 {voice.listening?"🔴":"🎙"}
               </button>
@@ -1354,8 +1386,8 @@ export default function APMAC() {
                 {sending?"···":"Send"}
               </button>
             </div>
-            <div style={{fontSize:11,color:voice.unavailable?C.orange:C.muted,marginTop:7,textAlign:"center"}}>
-              {voice.unavailable ? "🎙 Voice isn't available in this preview — typing works fine here, voice works once the site is live." : "Type your answer, or hold 🎙 to speak it instead"}
+            <div style={{fontSize:11,color:voice.listening?C.red:voice.errorMsg?C.orange:C.muted,marginTop:7,textAlign:"center",fontWeight:voice.listening?600:400}}>
+              {voice.listening ? "🔴 Listening — tap the mic again when you're done" : voice.errorMsg ? `🎙 ${voice.errorMsg}` : "Type your answer, or tap 🎙 to speak it instead"}
             </div>
           </div>
         )}
@@ -1461,11 +1493,16 @@ export default function APMAC() {
           <p style={{fontSize:16,lineHeight:1.7,margin:"16px 0 20px",color:C.text}}>{bmQuestions[bmIdx]}</p>
           <textarea value={input} onChange={e=>setInput(e.target.value)} placeholder="Type or tap 🎙 to talk — be specific and technical."
             rows={5} style={{width:"100%",background:C.surface,border:`1px solid ${input.length>15?selBenchmark.color:C.border}`,borderRadius:10,padding:"13px 16px",color:C.text,fontSize:14,lineHeight:1.6,outline:"none",resize:"vertical",boxSizing:"border-box",fontFamily:"inherit"}}/>
+          {(voice.listening || voice.errorMsg) && (
+            <div style={{fontSize:11,color:voice.listening?C.red:C.orange,marginTop:6,fontWeight:voice.listening?600:400}}>
+              {voice.listening ? "🔴 Listening — tap the mic again when you're done" : `🎙 ${voice.errorMsg}`}
+            </div>
+          )}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14,gap:10}}>
             <span style={{fontSize:12,color:C.muted}}>{input.trim().split(/\s+/).filter(Boolean).length} words</span>
             <div style={{display:"flex",gap:8}}>
-              <button onMouseDown={voice.start} onMouseUp={voice.stop} onTouchStart={voice.start} onTouchEnd={voice.stop}
-                title="Hold to speak"
+              <button onClick={voice.toggle}
+                title="Tap to speak"
                 style={{background:voice.listening?`${C.red}33`:`${selBenchmark.color}15`,border:`2px solid ${voice.listening?C.red:selBenchmark.color+"55"}`,color:voice.listening?C.red:selBenchmark.color,padding:"0 14px",borderRadius:9,cursor:"pointer",fontSize:17,flexShrink:0}}>
                 {voice.listening?"🔴":"🎙"}
               </button>
