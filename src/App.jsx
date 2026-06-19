@@ -734,10 +734,11 @@ export default function APMAC() {
   if (view==="auth") return (
     <div style={{...base,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:28}}>
       <div style={{width:"100%",maxWidth:400}}>
-        <div style={{display:"flex",alignItems:"center",gap:9,justifyContent:"center",marginBottom:28}}>
+        <div style={{display:"flex",alignItems:"center",gap:9,justifyContent:"center",marginBottom:8}}>
           <div style={{width:26,height:26,background:`linear-gradient(135deg,${C.blue},${C.cyan})`,borderRadius:6}}/>
           <span style={{fontSize:19,fontWeight:900,letterSpacing:"-0.5px"}}>APMAC<span style={{color:C.blue,fontWeight:400}}>™</span></span>
         </div>
+        <p style={{textAlign:"center",fontSize:12.5,color:C.muted,fontStyle:"italic",marginBottom:24}}>Championing the prestige of craftsmanship — by MATCEDI™</p>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28}}>
           <div style={{display:"flex",gap:6,marginBottom:22,background:C.bg,borderRadius:9,padding:4}}>
             <button onClick={()=>setAuthMode("signup")} style={{flex:1,background:authMode==="signup"?C.surface:"transparent",border:"none",borderRadius:7,padding:"8px 0",cursor:"pointer",fontSize:13,fontWeight:700,color:authMode==="signup"?C.blue:C.dim,boxShadow:authMode==="signup"?"0 1px 3px rgba(20,30,60,0.08)":"none"}}>Sign Up</button>
@@ -1184,6 +1185,20 @@ export default function APMAC() {
         </div>
       </div>
 
+      {/* WHY — MATCEDI's mission, stated plainly */}
+      <div style={{background:C.raised,borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:"48px 28px"}}>
+        <div style={{maxWidth:680,margin:"0 auto",textAlign:"center"}}>
+          <p style={{fontSize:11,color:C.blue,letterSpacing:2,textTransform:"uppercase",fontWeight:800,marginBottom:14}}>Why We Exist</p>
+          <h2 style={{fontSize:26,fontWeight:900,lineHeight:1.3,marginBottom:16,color:C.text}}>
+            We believe craftsmanship is one of humanity's greatest forces for progress.
+          </h2>
+          <p style={{fontSize:15,color:C.dim,lineHeight:1.8,maxWidth:560,margin:"0 auto"}}>
+            Whether it's a skilled trade, technical expertise, leadership, or problem-solving — craftsmanship is the pursuit of excellence and pride in your work. It deserves recognition regardless of your title, your degree, or the industry you practice it in. That's what we're here to champion.
+          </p>
+          <p style={{fontSize:13,color:C.muted,marginTop:18,fontWeight:600}}>— MATCEDI™</p>
+        </div>
+      </div>
+
       {/* WHAT IT DOES */}
       <div style={{maxWidth:800,margin:"0 auto",padding:"0 28px 56px"}}>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14}}>
@@ -1236,8 +1251,9 @@ export default function APMAC() {
         </div>
       </div>
 
-      <div style={{borderTop:`1px solid ${C.border}`,padding:"14px 28px",display:"flex",justifyContent:"space-between"}}>
+      <div style={{borderTop:`1px solid ${C.border}`,padding:"14px 28px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
         <span style={{color:C.muted,fontSize:12}}>© 2026 MATCEDI, LLC — APMAC Platform</span>
+        <span style={{color:C.muted,fontSize:11.5,fontStyle:"italic"}}>Championing the prestige of craftsmanship</span>
       </div>
     </div>
   );
