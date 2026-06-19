@@ -1484,15 +1484,15 @@ export default function APMAC() {
         </div>
       </div>
 
-      {/* WHY — MATCEDI's mission, stated plainly */}
+      {/* WHY — MATCEDI's mission, stated in their own exact words */}
       <div style={{background:C.raised,borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`,padding:"48px 28px"}}>
         <div style={{maxWidth:680,margin:"0 auto",textAlign:"center"}}>
-          <p style={{fontSize:11,color:C.blue,letterSpacing:2,textTransform:"uppercase",fontWeight:800,marginBottom:14}}>Why We Exist</p>
-          <h2 style={{fontSize:26,fontWeight:900,lineHeight:1.3,marginBottom:16,color:C.text}}>
-            We believe craftsmanship is one of humanity's greatest forces for progress.
+          <p style={{fontSize:11,color:C.blue,letterSpacing:2,textTransform:"uppercase",fontWeight:800,marginBottom:14}}>Why</p>
+          <h2 style={{fontSize:30,fontWeight:900,lineHeight:1.25,marginBottom:18,color:C.text}}>
+            To champion the prestige of craftsmanship.
           </h2>
           <p style={{fontSize:15,color:C.dim,lineHeight:1.8,maxWidth:560,margin:"0 auto"}}>
-            Whether it's a skilled trade, technical expertise, leadership, or problem-solving — craftsmanship is the pursuit of excellence and pride in your work. It deserves recognition regardless of your title, your degree, or the industry you practice it in. That's what we're here to champion.
+            We believe craftsmanship is one of humanity's greatest forces for progress. Whether it's a skilled trade, technical expertise, leadership, or problem-solving — craftsmanship is the pursuit of excellence and pride in your work. It deserves recognition regardless of your title, your degree, or the industry you practice it in.
           </p>
           <p style={{fontSize:13,color:C.muted,marginTop:18,fontWeight:600}}>— MATCEDI™</p>
         </div>
