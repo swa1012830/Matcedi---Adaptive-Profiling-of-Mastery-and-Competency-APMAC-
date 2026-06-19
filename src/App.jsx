@@ -366,6 +366,11 @@ function Sidebar({ view, activeTopicId, sidebarOpen, setSidebarOpen, filterCat, 
             🎯 My Path
           </button>
         )}
+        {onboardingDone && (
+          <button onClick={()=>onPickMode("credential")} style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:view==="credential"?C.blue+"12":"transparent",border:"none",borderRadius:8,padding:"9px 14px",cursor:"pointer",fontSize:13,fontWeight:800,color:view==="credential"?C.blue:C.text,marginBottom:6}}>
+            🪪 My Credential
+          </button>
+        )}
 
         {/* DISCUSSIONS — expandable category list */}
         <div style={{marginBottom:4}}>
@@ -456,6 +461,7 @@ export default function APMAC() {
   const [selectedTrade, setSelectedTrade] = useState(null);   // trade id once chosen
   const [onboardingDone, setOnboardingDone] = useState(false); // has user completed entry routing
   const [journeyLog, setJourneyLog]         = useState([]);    // {date, type, label, score, tier}
+  const [credentialTab, setCredentialTab]   = useState("credential"); // credential | history | trades
   const [discoveryMsgs, setDiscoveryMsgs]   = useState([]);
   const [discoveryDepth, setDiscoveryDepth] = useState(0);
   const [discoveryResult, setDiscoveryResult] = useState(null); // {trade, reasoning, signals}
@@ -969,6 +975,165 @@ export default function APMAC() {
   // ══════════════════════════════════════════════════════════════════════════════
   // MY PATH — personal home base, the default landing spot once a trade is set
   // ══════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════════
+  // CREDENTIAL — the official, portable record of standing. Header identity bar,
+  // status card, tabbed sections (Credential / History / Trades).
+  // ══════════════════════════════════════════════════════════════════════════════
+  if (view==="credential") {
+    const trade = TRADES.find(t=>t.id===selectedTrade) || TRADES[0];
+    const tier = currentTier || TIERS[0];
+    const tierProgress = currentTier ? Math.round(((cumScore||0)-currentTier.min)/(currentTier.max-currentTier.min)*100) : 0;
+    const sortedLog = [...journeyLog].reverse();
+    const tradesWithActivity = TRADES.filter(t=>t.id!=="general").map(t=>{
+      const topicsForTrade = TOPICS.filter(x=>x.trade===t.id);
+      const doneForTrade = topicsForTrade.filter(x=>completed[x.id]||completed[x.id+"_self"]).length;
+      return { ...t, topicsTotal: topicsForTrade.length, topicsDone: doneForTrade };
+    }).filter(t=>t.topicsTotal>0);
+
+    return (
+      <div style={{display:"flex"}}>
+        <Sidebar view={view} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} filterCat={filterCat} setFilterCat={setFilterCat} completed={completed}
+          onHome={()=>setView(onboardingDone?"mypath":"home")} onPickMode={(v)=>setView(v)} onBenchmarks={()=>setView("benchmarks")}
+          onPickBenchmark={(bm)=>startBenchmark(bm)} onMilitary={()=>setView("military")} onEmployer={goEmployer} authed={authed} plan={plan} onAuth={()=>{setAuthMode("signup");setView("auth");}} onboardingDone={onboardingDone} onMyPath={()=>setView("mypath")}/>
+        <div style={{...base,flex:1,height:"100vh",overflowY:"auto"}}>
+
+          {/* IDENTITY HEADER BAR */}
+          <div style={{background:`linear-gradient(135deg,${C.blue},${C.cyan})`,padding:"24px 32px",color:"#fff"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:16}}>
+              <div style={{display:"flex",alignItems:"center",gap:14}}>
+                <div style={{width:54,height:54,borderRadius:"50%",background:"rgba(255,255,255,0.2)",border:"2px solid rgba(255,255,255,0.4)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:900}}>ME</div>
+                <div>
+                  <div style={{fontSize:19,fontWeight:800}}>Worker Profile</div>
+                  <div style={{fontSize:13,opacity:0.85}}>{trade.icon} {trade.label} · {plan==="paid"?"Full Access":"Free Tier"}</div>
+                </div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:11,opacity:0.8,marginBottom:2}}>APMAC ID</div>
+                <div style={{fontSize:14,fontWeight:700,fontFamily:"monospace"}}>AP-{(journeyLog.length*317+1042).toString().padStart(6,"0")}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* STATUS CARD */}
+          <div style={{padding:"20px 32px"}}>
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:22,display:"flex",alignItems:"center",gap:24,flexWrap:"wrap"}}>
+              <div style={{width:64,height:64,borderRadius:"50%",background:`${tier.color}18`,border:`3px solid ${tier.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,fontWeight:900,color:tier.color,flexShrink:0}}>{tier.level}</div>
+              <div style={{flex:1,minWidth:200}}>
+                <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase"}}>Current Standing</div>
+                <div style={{fontSize:20,fontWeight:900,color:tier.color}}>{tier.name}</div>
+                <div style={{fontSize:12.5,color:C.dim,marginTop:2}}>{cumScore!=null ? `${cumScore}% verified competency score` : "No verification activity yet"}</div>
+              </div>
+              {cumScore!=null && (
+                <div style={{minWidth:140}}>
+                  <div style={{background:C.bg,borderRadius:4,height:7}}>
+                    <div style={{background:tier.color,borderRadius:4,height:7,width:`${Math.min(tierProgress,100)}%`}}/>
+                  </div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:5}}>{tierProgress}% to next tier</div>
+                </div>
+              )}
+              <div style={{display:"flex",gap:8,marginLeft:"auto"}}>
+                <Badge color={C.green} small>✓ Verified by APMAC</Badge>
+              </div>
+            </div>
+          </div>
+
+          {/* TABS */}
+          <div style={{padding:"0 32px"}}>
+            <div style={{display:"flex",gap:2,borderBottom:`1px solid ${C.border}`}}>
+              {[
+                {id:"credential",label:"Credential"},
+                {id:"history",label:"History"},
+                {id:"trades",label:"Trades"},
+              ].map(t=>(
+                <button key={t.id} onClick={()=>setCredentialTab(t.id)}
+                  style={{background:credentialTab===t.id?C.surface:"transparent",border:"none",borderBottom:credentialTab===t.id?`2px solid ${C.blue}`:"2px solid transparent",color:credentialTab===t.id?C.blue:C.dim,padding:"12px 20px",cursor:"pointer",fontSize:13.5,fontWeight:700}}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{maxWidth:780,padding:"24px 32px"}}>
+
+            {/* CREDENTIAL TAB */}
+            {credentialTab==="credential" && (
+              <div style={{display:"flex",flexDirection:"column",gap:16}}>
+                <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:22}}>
+                  <div style={{fontSize:12,color:C.muted,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",marginBottom:14}}>Tier Requirements</div>
+                  {TIERS.filter(t=>t.level>0).map(t=>{
+                    const achieved = tier.level >= t.level;
+                    return (
+                      <div key={t.level} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 0",borderBottom:t.level<4?`1px solid ${C.border}`:"none"}}>
+                        <div style={{width:28,height:28,borderRadius:"50%",background:achieved?`${t.color}22`:C.bg,border:`2px solid ${achieved?t.color:C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:achieved?t.color:C.muted}}>{achieved?"✓":t.level}</div>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:13.5,fontWeight:700,color:achieved?C.text:C.muted}}>{t.name}</div>
+                          <div style={{fontSize:11.5,color:C.muted}}>{t.min}–{t.max}% verified score</div>
+                        </div>
+                        {achieved && <Badge color={t.color} small>Achieved</Badge>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{background:`${C.blue}08`,border:`1px solid ${C.blue}28`,borderRadius:12,padding:"16px 18px",fontSize:13,color:C.dim,lineHeight:1.6}}>
+                  This credential is built from continuous, verified conversation — not a single test. It updates as you complete more discussions, self-study, and benchmarks.
+                </div>
+              </div>
+            )}
+
+            {/* HISTORY TAB */}
+            {credentialTab==="history" && (
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:22}}>
+                <div style={{fontSize:12,color:C.muted,fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",marginBottom:14}}>Full Activity Log</div>
+                {sortedLog.length===0 ? (
+                  <div style={{textAlign:"center",padding:"30px 0",color:C.muted,fontSize:13.5}}>No activity yet — your first session will appear here.</div>
+                ) : (
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    {sortedLog.map((entry,i)=>(
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:12,paddingBottom:10,borderBottom:i<sortedLog.length-1?`1px solid ${C.border}`:"none"}}>
+                        <div style={{width:34,height:34,borderRadius:9,background:`${trade.color}14`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0}}>
+                          {entry.type==="Discovery"?"🧭":entry.type==="Self-Study"?"🎯":entry.type==="Classification"?"🎖":"💬"}
+                        </div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:13.5,fontWeight:600,color:C.text}}>{entry.label}</div>
+                          <div style={{fontSize:11.5,color:C.muted}}>{entry.type} · {new Date(entry.date).toLocaleDateString()} {new Date(entry.date).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
+                        </div>
+                        {entry.score!=null && <div style={{fontWeight:800,fontSize:15,color:trade.color}}>{entry.score}%</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TRADES TAB */}
+            {credentialTab==="trades" && (
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {tradesWithActivity.length===0 ? (
+                  <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:30,textAlign:"center",color:C.muted,fontSize:13.5}}>
+                    No trade activity recorded yet.
+                  </div>
+                ) : tradesWithActivity.map(t=>(
+                  <div key={t.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:18,display:"flex",alignItems:"center",gap:16}}>
+                    <span style={{fontSize:24}}>{t.icon}</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:700,fontSize:14.5}}>{t.label}</div>
+                      <div style={{fontSize:12,color:C.muted}}>{t.topicsDone} of {t.topicsTotal} topics completed</div>
+                    </div>
+                    <div style={{width:80}}>
+                      <div style={{background:C.bg,borderRadius:4,height:6}}>
+                        <div style={{background:t.color,borderRadius:4,height:6,width:`${Math.round((t.topicsDone/t.topicsTotal)*100)}%`}}/>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (view==="mypath") {
     const trade = TRADES.find(t=>t.id===selectedTrade) || TRADES[0];
     const tradeTopics = selectedTrade==="general"
