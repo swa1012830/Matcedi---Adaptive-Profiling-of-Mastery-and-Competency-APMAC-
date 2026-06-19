@@ -361,13 +361,13 @@ function Sidebar({ view, activeTopicId, sidebarOpen, setSidebarOpen, filterCat, 
       </div>
 
       <div style={{flex:1,padding:"10px 0"}}>
-        {/* MY PATH — always reachable once onboarded */}
-        {onboardingDone && (
+        {/* MY PATH & MY CREDENTIAL — visible any time you're logged in */}
+        {authed && (
           <button onClick={onMyPath} style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:view==="mypath"?C.blue+"12":"transparent",border:"none",borderRadius:8,padding:"9px 14px",cursor:"pointer",fontSize:13,fontWeight:800,color:view==="mypath"?C.blue:C.text,marginBottom:6}}>
             🎯 My Path
           </button>
         )}
-        {onboardingDone && (
+        {authed && (
           <button onClick={()=>onPickMode("credential")} style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:view==="credential"?C.blue+"12":"transparent",border:"none",borderRadius:8,padding:"9px 14px",cursor:"pointer",fontSize:13,fontWeight:800,color:view==="credential"?C.blue:C.text,marginBottom:6}}>
             🪪 My Credential
           </button>
